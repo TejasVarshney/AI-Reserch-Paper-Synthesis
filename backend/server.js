@@ -27,7 +27,13 @@ const FRONTEND_DIST = join(__dirname, '..', 'frontend', 'dist');
 const PORT = process.env.PORT || 4000;
 
 const app = express();
-app.use(cors());
+// In dev / when CORS_ORIGIN is unset, allow any origin (the same-origin
+// local setup and curl smoke tests still work). Set CORS_ORIGIN in prod
+// (e.g. https://synthesis-app.netlify.app) to lock down cross-origin.
+const corsOptions = process.env.CORS_ORIGIN
+  ? { origin: process.env.CORS_ORIGIN.split(',').map((s) => s.trim()) }
+  : {};
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '25mb' })); // buckets can carry full-text papers
 
 // In-memory upload handling for PDF extraction (max 25 MB / file).

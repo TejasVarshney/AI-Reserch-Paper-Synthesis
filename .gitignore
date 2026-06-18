@@ -41,9 +41,8 @@ pnpm-debug.log*
 .DS_Store
 Thumbs.db
 
-# npm related log files
-frontend/package-lock.json
-backend/package-lock.json
+# Lockfiles ARE committed so Netlify/Render installs are reproducible.
+# (Leave this section empty if you ever need to ignore them.)
 
 # Local development environment related files
 .claude
