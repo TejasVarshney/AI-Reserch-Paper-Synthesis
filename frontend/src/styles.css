@@ -134,6 +134,23 @@ a {
     box-shadow: none;
 }
 
+.btn.danger {
+    color: #fff;
+    background: var(--danger);
+    box-shadow: 0 12px 28px -14px rgba(255, 138, 122, .7);
+}
+
+.btn.danger:hover:not(:disabled) {
+    filter: brightness(1.07);
+    transform: translateY(-1px);
+}
+
+.btn.danger:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+    box-shadow: none;
+}
+
 .btn.ghost {
     background: var(--surface-2);
     border-color: var(--line-2);

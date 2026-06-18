@@ -25,7 +25,7 @@ export default function Header({ crumb, children }) {
   return (
     <header className="topbar">
       <div className="topbar-left">
-        <Link to="/buckets" className="wordmark" title="All buckets">
+        <Link to="/" className="wordmark" title="Home">
           <span className="wordmark-glyph" aria-hidden="true">
             <svg viewBox="0 0 32 32" width="18" height="18" fill="none">
               <g stroke="var(--signal)" strokeWidth="2" strokeLinecap="round">

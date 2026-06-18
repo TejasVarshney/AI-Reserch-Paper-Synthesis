@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import Header from '../components/Header.jsx';
 import SourcesSidebar from '../components/SourcesSidebar.jsx';
 import ChatPanel from '../components/ChatPanel.jsx';
+import ConfirmDialog from '../components/ConfirmDialog.jsx';
 import { useToast } from '../components/ToastProvider.jsx';
 import * as store from '../lib/store.js';
 import * as api from '../lib/api.js';
@@ -24,6 +25,8 @@ export default function Workspace() {
   const [briefBusy, setBriefBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [highlightId, setHighlightId] = useState(null);
+  const [confirmClearChat, setConfirmClearChat] = useState(false);
+  const [confirmRemovePaper, setConfirmRemovePaper] = useState(null);
   const paperRefs = useRef({});
   const hlTimer = useRef(null);
 
@@ -48,7 +51,12 @@ export default function Workspace() {
 
   // ── sources ──────────────────────────────────────────────
   const addPaper = (p) => { store.addPaper(id, p); reload(); };
-  const removePaper = (pid) => { store.removePaper(id, pid); reload(); };
+  const executeRemovePaper = () => {
+    if (!confirmRemovePaper) return;
+    store.removePaper(id, confirmRemovePaper.id);
+    setConfirmRemovePaper(null);
+    reload();
+  };
 
   const uploadPdf = async (file) => {
     setUploading(true);
@@ -148,7 +156,7 @@ export default function Workspace() {
     <div className="shell shell--work">
       <Header crumb={bucket.name}>
         {messages.length > 0 && (
-          <button className="btn ghost sm" onClick={() => { if (confirm('Clear this conversation?')) persist([]); }}>
+          <button className="btn ghost sm" onClick={() => setConfirmClearChat(true)}>
             Clear chat
           </button>
         )}
@@ -160,7 +168,7 @@ export default function Workspace() {
           defaultQuery={bucket.question || bucket.name}
           onAdd={addPaper}
           onUploadPdf={uploadPdf}
-          onRemove={removePaper}
+          onRemove={(pid) => setConfirmRemovePaper(papers.find((p) => p.id === pid))}
           uploading={uploading}
           highlightId={highlightId}
           registerRef={registerRef}
@@ -176,6 +184,26 @@ export default function Workspace() {
           hasPapers={papers.length > 0}
         />
       </div>
+
+      <ConfirmDialog
+        open={confirmClearChat}
+        title="Clear conversation?"
+        description="Are you sure you want to clear this conversation? This will permanently remove all messages."
+        confirmText="Clear chat"
+        danger={true}
+        onConfirm={() => persist([])}
+        onClose={() => setConfirmClearChat(false)}
+      />
+
+      <ConfirmDialog
+        open={!!confirmRemovePaper}
+        title="Remove paper?"
+        description={`Remove “${confirmRemovePaper?.title}” from this bucket?`}
+        confirmText="Remove paper"
+        danger={true}
+        onConfirm={executeRemovePaper}
+        onClose={() => setConfirmRemovePaper(null)}
+      />
     </div>
   );
 }

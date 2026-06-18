@@ -22,6 +22,7 @@ function detectStyle() {
   if (e.endsWith('/chat/completions')) return 'openai';
   const m = (MODEL || '').toLowerCase();
   if (m.startsWith('anthropic/') || m.includes('claude')) return 'anthropic';
+  if (m.includes('gemma')) return 'openai';
   return 'openai';
 }
 const STYLE = detectStyle();

@@ -40,7 +40,7 @@ cp .env.example .env
 ```ini
 # Full URL or base URL — the server appends the right path automatically.
 LLM_ENDPOINT=https://api.openai.com/v1            # or http://host/api/v1 (Anthropic-style)
-LLM_MODEL=gpt-4o-mini                             # or anthropic/claude-opus-4-8
+LLM_MODEL=gpt-4o-mini                             # or gemma-*, anthropic/claude-opus-4-8
 LLM_API_KEY=sk-...                                # bearer / x-api-key
 LLM_API_STYLE=auto                                # auto | openai | anthropic
 ```
@@ -49,7 +49,7 @@ LLM_API_STYLE=auto                                # auto | openai | anthropic
 - **openai** → `POST {endpoint}/chat/completions`, `Authorization: Bearer`
 - **anthropic** → `POST {endpoint}/messages`, `x-api-key` + `anthropic-version`
 
-Works with OpenAI, OpenRouter, Groq, Ollama, LM Studio, Anthropic-compatible gateways, etc.
+Works with OpenAI, OpenRouter, Groq, Gemma-compatible OpenAI APIs, Ollama, LM Studio, Anthropic-compatible gateways, etc.
 
 ## 2. Install & run (development)
 

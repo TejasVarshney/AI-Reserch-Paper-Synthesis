@@ -2,12 +2,14 @@ import { useState } from 'react';
 import Header from '../components/Header.jsx';
 import BucketCard from '../components/BucketCard.jsx';
 import BucketDialog from '../components/BucketDialog.jsx';
+import ConfirmDialog from '../components/ConfirmDialog.jsx';
 import { useToast } from '../components/ToastProvider.jsx';
 import { loadBuckets, createBucket, updateBucket, deleteBucket } from '../lib/store.js';
 
 export default function Buckets() {
   const [buckets, setBuckets] = useState(() => loadBuckets());
   const [dialog, setDialog] = useState({ open: false, editing: null });
+  const [confirmDelete, setConfirmDelete] = useState(null);
   const flash = useToast();
 
   const refresh = () => setBuckets(loadBuckets());
@@ -24,10 +26,11 @@ export default function Buckets() {
     refresh();
   };
 
-  const remove = (bucket) => {
-    if (!confirm(`Delete “${bucket.name}” and its ${bucket.papers.length} paper(s)? This can't be undone.`)) return;
-    deleteBucket(bucket.id);
+  const executeDelete = () => {
+    if (!confirmDelete) return;
+    deleteBucket(confirmDelete.id);
     flash('Bucket deleted.');
+    setConfirmDelete(null);
     refresh();
   };
 
@@ -68,7 +71,7 @@ export default function Buckets() {
                 key={b.id}
                 bucket={b}
                 onEdit={(bk) => setDialog({ open: true, editing: bk })}
-                onDelete={remove}
+                onDelete={(bk) => setConfirmDelete(bk)}
               />
             ))}
           </div>
@@ -84,6 +87,16 @@ export default function Buckets() {
         initial={dialog.editing}
         onSave={save}
         onClose={() => setDialog({ open: false, editing: null })}
+      />
+      
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="Delete bucket?"
+        description={confirmDelete ? `Delete “${confirmDelete.name}” and its ${confirmDelete.papers.length} paper(s)? This can't be undone.` : ''}
+        confirmText="Delete bucket"
+        danger={true}
+        onConfirm={executeDelete}
+        onClose={() => setConfirmDelete(null)}
       />
     </div>
   );
