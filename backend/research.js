@@ -3,7 +3,8 @@
 // with citation extraction, and structured brief generation.
 
 import { chat } from './llm.js';
-import { buildPassages, retrieveWithFallback, formatContext } from './rag.js';
+import { buildPassages, hybridRetrieveWithFallback, formatContext } from './rag.js';
+import { correctiveRetrieve } from './crag.js';
 
 // ── Helpers ──────────────────────────────────────────────────
 function stripFences(s) {
@@ -105,14 +106,22 @@ Hard rules:
 export async function ask({ papers, question, history = [] }) {
   const passages = buildPassages(papers);
   if (!passages.length) {
-    return { answer: '_No readable content found in this bucket yet. Add papers or ingest a PDF first._', citations: [], passages: [], usage: null, model: null };
+    return { answer: '_No readable content found in this bucket yet. Add papers or ingest a PDF first._', citations: [], passages: [], retrieval: null, usage: null, model: null };
   }
-  const retrieved = retrieveWithFallback(question, passages, 8);
+  // Corrective RAG: retrieve, grade for relevance, and rewrite + re-retrieve
+  // if support is weak. `insufficient` means nothing relevant survived.
+  const { retrieved, verdict, insufficient, steps } = await correctiveRetrieve({ question, passages, k: 8 });
   const context = formatContext(retrieved);
 
   const convo = history
     .slice(-6)
     .map((h) => ({ role: h.role === 'assistant' ? 'assistant' : 'user', content: h.content }));
+
+  // When correction couldn't find relevant support, tell the model plainly so
+  // it reports the gap rather than stretching weak passages into an answer.
+  const weakNote = insufficient
+    ? '\n\nNote: an automated relevance check found weak support for this question in the sources. If the passages below do not actually answer it, say exactly what is missing instead of guessing.'
+    : '';
 
   const user = `Source passages (the ONLY information you may use):
 
@@ -120,7 +129,7 @@ ${context}
 
 === END OF SOURCES ===
 
-Question: ${question}
+Question: ${question}${weakNote}
 
 Answer using only the passages above, citing every claim with [P# §Section].`;
 
@@ -133,7 +142,8 @@ Answer using only the passages above, citing every claim with [P# §Section].`;
   return {
     answer: content,
     citations: extractCitations(content, retrieved),
-    passages: retrieved.map((r) => ({ paperIndex: r.paperIndex, title: r.title, section: r.section, paperId: r.paperId, score: r.score, preview: r.text.slice(0, 200) })),
+    passages: retrieved.map((r) => ({ paperIndex: r.paperIndex, title: r.title, section: r.section, paperId: r.paperId, score: r.score, relevance: r.relevance ?? null, preview: r.text.slice(0, 200) })),
+    retrieval: { verdict, insufficient, steps },
     usage,
     model,
   };
@@ -150,8 +160,10 @@ export async function brief({ papers, question = '' }) {
     return { brief: '_Add papers with content to generate a brief._', citations: [], passages: [], usage: null, model: null };
   }
   // Pull broad context using the question plus generic research probes.
+  // A brief wants recall across the corpus, so we use hybrid retrieval here
+  // (BM25 + semantic) rather than CRAG's precision-oriented filtering.
   const probe = `${question} methodology results findings limitations conclusion contributions comparison`;
-  const retrieved = retrieveWithFallback(probe, passages, 16);
+  const retrieved = await hybridRetrieveWithFallback(probe, passages, 16);
   const context = formatContext(retrieved);
   const titles = papers.map((p, i) => `P${i + 1}: ${p.title || 'Untitled'}`).join('\n');
 

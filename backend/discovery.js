@@ -14,18 +14,32 @@ function withTimeout(ms) {
   return { signal: c.signal, done: () => clearTimeout(t) };
 }
 
+async function fetchWithRetry(url, options, retries = 2, baseDelay = 1500) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const t = withTimeout(12000);
+    let res;
+    try {
+      res = await fetch(url, { ...options, signal: t.signal });
+    } finally {
+      t.done();
+    }
+    if (res.status === 429 || res.status === 503) {
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, baseDelay * (attempt + 1)));
+        continue;
+      }
+      throw new Error(`rate-limited (${res.status}), try again shortly`);
+    }
+    return res;
+  }
+}
+
 // ── arXiv ────────────────────────────────────────────────────
 async function searchArxiv(query, limit) {
   const url =
-    `http://export.arxiv.org/api/query?search_query=${encodeURIComponent('all:' + query)}` +
+    `https://export.arxiv.org/api/query?search_query=${encodeURIComponent('all:' + query)}` +
     `&start=0&max_results=${limit}&sortBy=relevance`;
-  const t = withTimeout(12000);
-  let res;
-  try {
-    res = await fetch(url, { signal: t.signal, headers: { 'User-Agent': 'SynthesisEngine/1.0' } });
-  } finally {
-    t.done();
-  }
+  const res = await fetchWithRetry(url, { headers: { 'User-Agent': 'SynthesisEngine/1.0' } });
   if (!res.ok) throw new Error(`arXiv ${res.status}`);
   const feed = xml.parse(await res.text());
   const entries = asArray(feed?.feed?.entry);
@@ -55,13 +69,7 @@ async function searchSemanticScholar(query, limit) {
   const url =
     `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(query)}` +
     `&limit=${limit}&fields=${fields}`;
-  const t = withTimeout(12000);
-  let res;
-  try {
-    res = await fetch(url, { signal: t.signal, headers: { 'User-Agent': 'SynthesisEngine/1.0' } });
-  } finally {
-    t.done();
-  }
+  const res = await fetchWithRetry(url, { headers: { 'User-Agent': 'SynthesisEngine/1.0' } });
   if (!res.ok) throw new Error(`Semantic Scholar ${res.status}`);
   const data = await res.json();
   return asArray(data.data).map((p, i) => ({

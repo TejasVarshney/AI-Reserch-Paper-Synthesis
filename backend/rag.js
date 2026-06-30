@@ -1,7 +1,18 @@
 // rag.js
-// Lexical retrieval (BM25) over paper passages. Each passage keeps its
-// provenance (paper index, title, section) so every retrieved snippet —
-// and therefore every claim grounded in it — is traceable to a source.
+// Retrieval over paper passages. Two retrievers live here:
+//   • BM25 — lexical scoring, always available, no external services.
+//   • hybrid — BM25 blended with embedding cosine similarity, when an
+//     embedding endpoint is reachable (see embeddings.js). Falls back to
+//     pure BM25 when it isn't, so retrieval degrades gracefully.
+// Each passage keeps its provenance (paper index, title, section) so every
+// retrieved snippet — and the claims grounded in it — stays traceable.
+
+import { embeddingsAvailable, embed, embedAll, cosine, WEIGHTS, warnOnce } from './embeddings.js';
+
+// Upper bound on how many passages we embed per query. Below this we embed
+// the whole corpus (so semantic search can surface passages BM25 missed);
+// above it we embed only the strongest BM25 candidates to bound cost.
+const EMBED_POOL_MAX = Number(process.env.RAG_EMBED_POOL_MAX ?? 256);
 
 const STOP = new Set(
   ('a an the of to in on for and or but with without within into from by as at is are was were be been being ' +
@@ -81,9 +92,9 @@ function slug(s) {
   return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24);
 }
 
-/** Rank passages against a query with BM25 and return the top-k. */
-export function retrieve(query, passages, k = 8) {
-  if (!passages.length) return [];
+// Score every passage against the query with BM25. Returns raw scores for
+// ALL passages (including 0), so callers can re-rank or blend them.
+function computeBm25(query, passages) {
   const qTerms = [...new Set(tokenize(query))];
   const N = passages.length;
   const avgdl = passages.reduce((s, p) => s + p.tokens.length, 0) / N || 1;
@@ -99,7 +110,7 @@ export function retrieve(query, passages, k = 8) {
 
   const k1 = 1.5;
   const b = 0.75;
-  const scored = passages.map((p) => {
+  return passages.map((p) => {
     const dl = p.tokens.length || 1;
     let score = 0;
     for (const t of qTerms) {
@@ -111,12 +122,30 @@ export function retrieve(query, passages, k = 8) {
     }
     return { passage: p, score };
   });
+}
 
-  return scored
+// Shape the top-k raw BM25 scores into retrieval results. `semantic`/
+// `relevance` are null here to signal "no embedding signal was used".
+function lexicalTopK(bm25, k) {
+  return bm25
     .filter((s) => s.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, k)
-    .map((s) => ({ ...s.passage, score: Number(s.score.toFixed(3)) }));
+    .map((s) => ({
+      ...s.passage,
+      score: Number(s.score.toFixed(3)),
+      bm25: Number(s.score.toFixed(3)),
+      semantic: null,
+      relevance: null,
+    }));
+}
+
+/** Rank passages against a query with BM25 and return the top-k (lexical only). */
+export function retrieve(query, passages, k = 8) {
+  if (!passages.length) return [];
+  return lexicalTopK(computeBm25(query, passages), k).map(
+    ({ bm25, semantic, relevance, ...p }) => p
+  );
 }
 
 /**
@@ -132,6 +161,97 @@ export function retrieveWithFallback(query, passages, k = 8) {
     .filter((p) => !used.has(p.pid))
     .slice(0, k - scored.length)
     .map((p) => ({ ...p, score: 0 }));
+  return [...scored, ...filler];
+}
+
+// ── Hybrid retrieval (BM25 + semantic embeddings) ────────────────
+// Min-max normalizer over a set of values, returned as a function. Maps the
+// observed range onto [0,1]; a flat range collapses to 1 (positive) or 0.
+function minMax(values) {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const v of values) {
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  const range = max - min;
+  return (v) => (range > 0 ? (v - min) / range : v > 0 ? 1 : 0);
+}
+
+/**
+ * Rank passages with a weighted blend of BM25 and embedding cosine
+ * similarity. Both signals are min-max normalized across the candidate pool
+ * before blending (WEIGHTS.bm25 / WEIGHTS.semantic). Returns passages with
+ * `score` (blended), plus `bm25`, `semantic` and `relevance` for inspection.
+ * Falls back to pure BM25 if the embedding endpoint is unavailable.
+ */
+export async function hybridRetrieve(query, passages, k = 8) {
+  if (!passages.length) return [];
+  const bm25 = computeBm25(query, passages);
+
+  let semantic = false;
+  try {
+    semantic = await embeddingsAvailable();
+  } catch {
+    semantic = false;
+  }
+  if (!semantic) return lexicalTopK(bm25, k);
+
+  const bm25ByPid = new Map(bm25.map((s) => [s.passage.pid, s.score]));
+
+  // Embed a bounded candidate pool: the whole corpus when it's small,
+  // otherwise the strongest BM25 candidates (keeps embedding cost predictable).
+  let pool = passages;
+  if (passages.length > EMBED_POOL_MAX) {
+    pool = [...bm25]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, EMBED_POOL_MAX)
+      .map((s) => s.passage);
+  }
+
+  let qVec;
+  let vecs;
+  try {
+    qVec = await embed(query);
+    vecs = await embedAll(pool.map((p) => p.text));
+  } catch (err) {
+    warnOnce(`semantic scoring failed, using BM25 only: ${err.message}`);
+    return lexicalTopK(bm25, k);
+  }
+
+  const semByPid = new Map(pool.map((p, i) => [p.pid, cosine(qVec, vecs[i])]));
+  const total = WEIGHTS.bm25 + WEIGHTS.semantic || 1;
+  const wB = WEIGHTS.bm25 / total;
+  const wS = WEIGHTS.semantic / total;
+  const normB = minMax(pool.map((p) => bm25ByPid.get(p.pid) || 0));
+  const normS = minMax(pool.map((p) => semByPid.get(p.pid) || 0));
+
+  return pool
+    .map((p) => {
+      const b = bm25ByPid.get(p.pid) || 0;
+      const s = semByPid.get(p.pid) || 0;
+      const score = wB * normB(b) + wS * normS(s);
+      return {
+        ...p,
+        score: Number(score.toFixed(3)),
+        bm25: Number(b.toFixed(3)),
+        semantic: Number(s.toFixed(3)),
+        relevance: Number(score.toFixed(3)),
+      };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, k);
+}
+
+/** Hybrid retrieve, padded to k with unused passages so context never starves. */
+export async function hybridRetrieveWithFallback(query, passages, k = 8) {
+  const scored = await hybridRetrieve(query, passages, k);
+  if (scored.length >= k) return scored;
+  const used = new Set(scored.map((s) => s.pid));
+  const filler = passages
+    .filter((p) => !used.has(p.pid))
+    .slice(0, k - scored.length)
+    .map((p) => ({ ...p, score: 0, bm25: 0, semantic: null, relevance: 0 }));
   return [...scored, ...filler];
 }
 
